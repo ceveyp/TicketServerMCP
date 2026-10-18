@@ -1,49 +1,14 @@
 from datetime import datetime
-from typing import Dict, Literal, List
+from typing import Dict, List, Sequence
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.crud.common import _serialize_response, _serialize_item
+from app.crud.common import _serialize_item
 from app.models.comments import Comment
 from app.models.tickets import Ticket
-
-Priorities = Literal['P1', 'P2', 'P3', 'P4']
-
-SortDirections = Literal['ASC', 'DESC']
-
-Departments = Literal[
-    'operations',
-    'sales',
-    'marketing',
-    'it',
-    'merchandising',
-    'accounting',
-    'screen_print',
-    'art'
-]
-
-Statuses = Literal[
-    'open',
-    'in_progress',
-    'waiting',
-    'closed'
-]
-
-TicketTypes = Literal[
-    'generic',
-    'linesheet_update',
-    'credit_memo',
-    'order_modification',
-    'rma_request',
-    'payroll_discrepancy',
-    'recruiting_request',
-    'po_item_inquiry',
-    'accounting_close',
-    'customer_billing_inquiry',
-    'system_access_request'
-]
+from app.types import Priorities, Departments, TicketTypes, Statuses, SortDirections
 
 
 class ListTicketArgs(BaseModel):
@@ -62,31 +27,84 @@ class ListTicketArgs(BaseModel):
     sort_direction: SortDirections = 'DESC'
 
 
+def _serialize_ticket(ticket: Ticket, full: bool = False) -> Dict:
+    data = _serialize_item(ticket.__dict__)
+    if not full:
+        del data["description"]
+        del data["template_data"]
+        del data["rule_key"]
+        del data["erp_context"]
+    if ticket.assignee:
+        data["assignee"] = {
+            "id": ticket.assignee.id,
+            "name": ticket.assignee.name,
+        }
+    if ticket.reporter:
+        data["reporter"] = {
+            "id": ticket.reporter.id,
+            "name": ticket.reporter.name
+        }
+    return data
+
+
+def _serialize_tickets(tickets: Sequence[Ticket]) -> List[Dict]:
+    return [_serialize_ticket(ticket) for ticket in tickets]
+
+
 def get_ticket_comments(db: Session, ticket_id: int) -> List[Dict]:
     stmt = (
-        select(
-            Comment.author_id,
-            Comment.body,
-            Comment.is_system,
-            Comment.created_at
-        )
+        select(Comment)
         .where(Comment.ticket_id == ticket_id)
         .limit(100)
+        .options(joinedload(Comment.author))
     )
     results = db.execute(stmt)
-    return _serialize_response([dict(row) for row in results.mappings()])
+    comments = results.scalars().all()
+    return [_serialize_item({
+        "author": {
+            "id": comment.author.id,
+            "name": comment.author.name
+        },
+        "body": comment.body,
+        "created_at": comment.created_at,
+        "is_system": comment.is_system
+    }) for comment in comments]
 
 
 def get_ticket(db: Session, ticket_id: int) -> Dict:
-    stmt = select(Ticket).where(Ticket.id == ticket_id)
+    stmt = (
+        select(Ticket)
+        .where(Ticket.id == ticket_id)
+        .options(
+            joinedload(Ticket.reporter),
+            joinedload(Ticket.assignee)
+        )
+    )
     ticket: Ticket | None = db.execute(stmt).scalar_one_or_none()
     if not ticket:
         return {}
     comments = get_ticket_comments(db, ticket_id)
-    response = ticket.__dict__
+    response = _serialize_ticket(ticket, True)
     response.update({"comments": comments})
-    _serialize_item(response)
     return response
+
+
+def get_ticket_ids(db: Session, ticket_ids: List[int]) -> List[Dict]:
+    if len(ticket_ids) > 50:
+        raise ValueError("Between 1 and 50 tickets can be queried at once")
+    for ticket_id in ticket_ids:
+        if not isinstance(ticket_id, int):
+            raise ValueError("Could not validate ticket IDs")
+    stmt = (
+        select(Ticket)
+        .where(Ticket.id.in_(ticket_ids))
+        .options(
+            joinedload(Ticket.reporter),
+            joinedload(Ticket.assignee)
+        )
+    )
+    tickets = db.execute(stmt).scalars().all()
+    return _serialize_tickets(tickets)
 
 
 def list_tickets(
@@ -123,21 +141,14 @@ def list_tickets(
     offset_value = (args.page - 1) * args.page_size
     order_by = Ticket.id.desc() if sort_direction == 'DESC' else Ticket.id.asc()
     stmt = (
-        select(
-            Ticket.id,
-            Ticket.title,
-            Ticket.priority,
-            Ticket.status,
-            Ticket.department,
-            Ticket.template_key,
-            Ticket.reporter_id,
-            Ticket.assignee_id,
-            Ticket.due_date,
-            Ticket.created_at
-        )
+        select(Ticket)
         .limit(args.page_size)
         .offset(offset_value)
         .order_by(order_by)
+        .options(
+            joinedload(Ticket.reporter),
+            joinedload(Ticket.assignee)
+        )
     )
     count_stmt = select(func.count(Ticket.id))
     filters = []
@@ -172,7 +183,7 @@ def list_tickets(
         "total_pages": total_pages
     }
     results = db.execute(stmt)
-    tickets = [dict(row) for row in results.mappings()]
-    tickets = _serialize_response(tickets)
+    tickets = results.scalars().all()
+    tickets = _serialize_tickets(tickets)
     response = {"pagination": pagination, "items": tickets}
     return response

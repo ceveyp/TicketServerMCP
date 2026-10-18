@@ -1,8 +1,10 @@
 from datetime import datetime
 
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.db import Base
+from app.models.users import User
 
 
 class Ticket(Base):
@@ -17,8 +19,10 @@ class Ticket(Base):
     template_key: Mapped[str]
     template_data: Mapped[str]
     rule_key: Mapped[str]
-    reporter_id: Mapped[int]
-    assignee_id: Mapped[int]
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id])
+    assignee_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    assignee: Mapped["User"] = relationship(foreign_keys=[assignee_id])
     erp_context: Mapped[str]
     due_date: Mapped[datetime]
     created_at: Mapped[datetime]
