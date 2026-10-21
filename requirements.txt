@@ -2,3 +2,6 @@ pydantic_settings
 sqlalchemy
 psycopg[binary]
 fastmcp
+openrouter
+tiktoken
+pgvector

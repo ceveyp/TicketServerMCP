@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import List
 
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -10,9 +11,10 @@ from app.models.users import User
 class Ticket(Base):
     __tablename__ = "tickets"
     id: Mapped[int] = mapped_column(primary_key=True)
+    comments: Mapped[List["Comment"]] = relationship(back_populates="ticket")
     title: Mapped[str]
     description: Mapped[str]
-    department: Mapped[str]
+    department: Mapped[str] = mapped_column(default=None, nullable=True)
     priority: Mapped[str]
     status: Mapped[str]
     source: Mapped[str]
